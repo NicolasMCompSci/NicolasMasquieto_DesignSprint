@@ -38,7 +38,14 @@ string ToLower(const string& word) {
 }
 
 // looks for elements to count in a line and increments them
-void CountThroughLine(string& line, atomic<int>& horatioCount, atomic<int>& andCount, atomic<int>& hamletCount, atomic<int>& godCount, atomic<int>& allWordCount) {
+void CountThroughLine(const string& line, int& totalHoratioCount, int& totalAndCount, int& totalHamletCount, int& totalGodCount, int& totalWordCount, mutex& sharedCountsMutex) {
+
+    // create scoped variables to count without much locking and unlocking
+    int horatioCount = 0;
+    int andCount = 0;
+    int hamletCount = 0;
+    int godCount = 0;
+    int wordCount = 0;
 
     stringstream stream(line);
     string word;
@@ -50,20 +57,29 @@ void CountThroughLine(string& line, atomic<int>& horatioCount, atomic<int>& andC
 
         // if word isn't empty check if it is one of the words we're looking for
         if (!cleanedWord.empty()) {
-            // check if word is one we're looking for
+            // check if word is one we're looking for, increment if so
             if (cleanedWord == horatioWord || cleanedWord == horatioWordPossessive)
-                horatioCount.fetch_add(1);
+                horatioCount++;
             else if (cleanedWord == andWord)
-                andCount.fetch_add(1);
+                andCount++;
             else if (cleanedWord == hamletWord || cleanedWord == hamletWordPossessive)
-                hamletCount.fetch_add(1);
+                hamletCount++;
             else if (cleanedWord == godWord || cleanedWord == godWordPossessive)
-                godCount.fetch_add(1);
+                godCount++;
 
-            // increase word count
-            allWordCount.fetch_add(1);
+            // increase word count by default after checking
+            wordCount++;
         }
     }
+
+    // lock critical section where all variables are updated.
+    // use a lock_guard which is an older version of scoped_lock, but is better with only 1 mutex
+    scoped_lock lock(sharedCountsMutex);
+    totalHoratioCount += horatioCount;
+    totalAndCount += andCount;
+    totalHamletCount += hamletCount;
+    totalGodCount += godCount;
+    totalWordCount += wordCount;
 }
 
 int main() {
@@ -76,12 +92,15 @@ int main() {
         return 1;
     }
 
-    // establish words that will be counted
-    int totalWordCount = 0;
+    // establish counting variables
     int totalHoratioCount = 0;
     int totalAndCount = 0;
     int totalHamletCount = 0;
     int totalGodCount = 0;
+    int totalWordCount = 0;
+
+    // mutex that will be used to update counting variables
+    mutex sharedCountsMutex;
 
     // set the number of threads for boost pool to use
     boost::asio::thread_pool pool(thread::hardware_concurrency());
@@ -89,17 +108,11 @@ int main() {
     // read through every line in parallel
     string line;
     while (getline(inputFile, line)) {
-        atomic<int> horatioCount(0), andCount(0), hamletCount(0), godCount(0), wordCount(0);
-
-        boost::asio::post(pool, [&]() { 
-            CountThroughLine(line, horatioCount, andCount, hamletCount, godCount, wordCount);
+        // Use boost thread pool to run CountThroughLine in each thread
+        // variables are passed by reference
+        boost::asio::post(pool, [line, &totalHoratioCount, &totalAndCount, &totalHamletCount, &totalGodCount, &totalWordCount, &sharedCountsMutex]() {
+            CountThroughLine(line, totalHoratioCount, totalAndCount, totalHamletCount, totalGodCount, totalWordCount, sharedCountsMutex);
         });
-
-        totalHoratioCount += horatioCount;
-        totalAndCount += andCount;
-        totalHamletCount += hamletCount;
-        totalGodCount += godCount;
-        totalWordCount += wordCount;
     }
 
     // join pool and close file
