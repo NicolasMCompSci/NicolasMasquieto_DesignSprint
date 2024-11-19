@@ -86,7 +86,7 @@ int main() {
     int totalHamletCount = 0;
     int totalGodCount = 0;
 
-    // set the number of threads for boost pool to use
+    // set the number of threads for boost pool to use equal to available cores
     boost::asio::thread_pool pool(thread::hardware_concurrency());
 
     // read through every line in parallel
