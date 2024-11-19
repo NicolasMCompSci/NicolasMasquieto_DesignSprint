@@ -13,18 +13,12 @@ using namespace std;
 // constant strings
 const string InputFileName = "Hamlet.txt";
 const string horatioWord = "horatio";
-const string horatioWordPossessive = "horatios";
+const string horatioWordPossessive = "horatios"; // accounts for possessive uses
 const string andWord = "and";
 const string hamletWord = "hamlet";
-const string hamletWordPossessive = "hamlets";
+const string hamletWordPossessive = "hamlets"; // accounts for possessive uses
 const string godWord = "god";
-const string godWordPossessive = "gods";
-
-mutex allWordCountSem;
-mutex horatioCountSem;
-mutex andCountSem;
-mutex hamletCountSem;
-mutex godCountSem;
+const string godWordPossessive = "gods"; // accounts for possessive uses
 
 // cleans word of any symbols such as commas
 string CleanWord(const string& word) {
@@ -43,35 +37,8 @@ string ToLower(const string& word) {
     return lower;
 }
 
-class Semaphore {
-public:
-    Semaphore(unsigned long init_count) {
-        count = init_count;
-    }
-
-    void acquire() { // decrement the internal counter
-        std::unique_lock<std::mutex> Lock(myMutex);
-        while (!count) {
-            Condition.wait(Lock);
-        }
-        count--;
-    }
-
-    void release() { // increment the internal counter
-        std::unique_lock<std::mutex> Lock(myMutex);
-        count++;
-        Lock.unlock();
-        Condition.notify_one();
-    }
-
-private:
-    std::mutex myMutex;
-    std::condition_variable Condition;
-    unsigned long count;
-};
-
 // looks for elements to count in a line and increments them
-void CountThroughLine(string& line, int& horatioCount, int& andCount, int& hamletCount, int& godCount, int& allWordCount) {
+void CountThroughLine(string& line, atomic<int>& horatioCount, atomic<int>& andCount, atomic<int>& hamletCount, atomic<int>& godCount, atomic<int>& allWordCount) {
 
     stringstream stream(line);
     string word;
@@ -84,31 +51,17 @@ void CountThroughLine(string& line, int& horatioCount, int& andCount, int& hamle
         // if word isn't empty check if it is one of the words we're looking for
         if (!cleanedWord.empty()) {
             // check if word is one we're looking for
-            if (cleanedWord == horatioWord || cleanedWord == horatioWordPossessive) {
-                horatioCountSem.lock();
-                horatioCount++;
-                horatioCountSem.unlock();
-            }
-            else if (cleanedWord == andWord) {
-                andCountSem.lock();
-                ++andCount;
-                andCountSem.unlock();
-            }
-            else if (cleanedWord == hamletWord || cleanedWord == hamletWordPossessive) {
-                hamletCountSem.lock();
-                hamletCount++;
-                hamletCountSem.unlock();
-            }
-            else if (cleanedWord == godWord || cleanedWord == godWordPossessive) {
-                godCountSem.lock();
-                godCount++;
-                godCountSem.unlock();
-            }
+            if (cleanedWord == horatioWord || cleanedWord == horatioWordPossessive)
+                horatioCount.fetch_add(1);
+            else if (cleanedWord == andWord)
+                andCount.fetch_add(1);
+            else if (cleanedWord == hamletWord || cleanedWord == hamletWordPossessive)
+                hamletCount.fetch_add(1);
+            else if (cleanedWord == godWord || cleanedWord == godWordPossessive)
+                godCount.fetch_add(1);
 
             // increase word count
-            allWordCountSem.lock();
-            allWordCount++;
-            allWordCountSem.unlock();
+            allWordCount.fetch_add(1);
         }
     }
 }
@@ -124,37 +77,41 @@ int main() {
     }
 
     // establish words that will be counted
-    int allWordCount = 0;
-    int horatioCount = 0;
-    int andCount = 0;
-    int hamletCount = 0;
-    int godCount = 0;
-
-    // set semaphores for all variables
-    //Semaphore allWordCountSem(1);
-    //Semaphore horatioCountSem(1);
-    //Semaphore andCountSem(1);
-    //Semaphore hamletCountSem(1);
-    //Semaphore godCountSem(1);
+    int totalWordCount = 0;
+    int totalHoratioCount = 0;
+    int totalAndCount = 0;
+    int totalHamletCount = 0;
+    int totalGodCount = 0;
 
     // set the number of threads for boost pool to use
     boost::asio::thread_pool pool(thread::hardware_concurrency());
 
     // read through every line in parallel
     string line;
-    while (getline(inputFile, line))
-        boost::asio::post(pool, [&]() { CountThroughLine(line, horatioCount, andCount, hamletCount, godCount, allWordCount); });
+    while (getline(inputFile, line)) {
+        atomic<int> horatioCount(0), andCount(0), hamletCount(0), godCount(0), wordCount(0);
+
+        boost::asio::post(pool, [&]() { 
+            CountThroughLine(line, horatioCount, andCount, hamletCount, godCount, wordCount);
+        });
+
+        totalHoratioCount += horatioCount;
+        totalAndCount += andCount;
+        totalHamletCount += hamletCount;
+        totalGodCount += godCount;
+        totalWordCount += wordCount;
+    }
 
     // join pool and close file
     pool.join();
     inputFile.close();
 
     // output results
-    cout << horatioCount << " " << horatioWord << endl;
-    cout << andCount << " " << andWord << endl;
-    cout << hamletCount << " " << hamletWord << endl;
-    cout << godCount << " " << godWord << endl;
-    cout << "Total word count = " << allWordCount << endl;
+    std::cout << totalHoratioCount << " " << horatioWord << endl;
+    std::cout << totalAndCount << " " << andWord << endl;
+    std::cout << totalHamletCount << " " << hamletWord << endl;
+    std::cout << totalGodCount << " " << godWord << endl;
+    std::cout << "Total word count = " << totalWordCount << endl;
 
     return 0;
 }
